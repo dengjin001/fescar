@@ -15,9 +15,12 @@
  */
 package io.seata.core.rpc.netty;
 
+import java.net.InetSocketAddress;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
-import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelOption;
@@ -29,6 +32,7 @@ import io.netty.channel.socket.SocketChannel;
 import io.netty.handler.timeout.IdleStateHandler;
 import io.seata.common.XID;
 import io.seata.common.thread.NamedThreadFactory;
+import io.seata.core.constants.ConfigurationKeys;
 import io.seata.core.rpc.RemotingBootstrap;
 import io.seata.core.rpc.netty.v1.ProtocolV1Decoder;
 import io.seata.core.rpc.netty.v1.ProtocolV1Encoder;
@@ -36,9 +40,8 @@ import io.seata.discovery.registry.RegistryFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.net.InetSocketAddress;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
+import static io.seata.common.DefaultValues.SERVER_PORT;
+import static io.seata.common.DefaultValues.SERVICE_OFFSET_SPRING_BOOT;
 
 /**
  * Rpc server bootstrap.
@@ -99,7 +102,7 @@ public class NettyServerBootstrap implements RemotingBootstrap {
     }
 
     /**
-     * Sets listen port.
+     * use for mock
      *
      * @param listenPort the listen port
      */
@@ -117,7 +120,22 @@ public class NettyServerBootstrap implements RemotingBootstrap {
      * @return the listen port
      */
     public int getListenPort() {
-        return listenPort;
+        if (listenPort != 0) {
+            return listenPort;
+        }
+        int port = 0;
+        try {
+            port = Integer.parseInt(System.getProperty(ConfigurationKeys.SERVER_RPC_PORT));
+        } catch (NumberFormatException exx) {
+            LOGGER.error("server port set error:{}", exx.getMessage());
+        }
+        if (port <= 0) {
+            String serverPort = System.getProperty(SERVER_PORT);
+            int defaultPort = Integer.parseInt(serverPort) + SERVICE_OFFSET_SPRING_BOOT;
+            LOGGER.error("listen port: {} is invalid, will use default port:{}", port, defaultPort);
+            port = defaultPort;
+        }
+        return port;
     }
 
     @Override
@@ -133,7 +151,7 @@ public class NettyServerBootstrap implements RemotingBootstrap {
             .childOption(ChannelOption.WRITE_BUFFER_WATER_MARK,
                 new WriteBufferWaterMark(nettyServerConfig.getWriteBufferLowWaterMark(),
                     nettyServerConfig.getWriteBufferHighWaterMark()))
-            .localAddress(new InetSocketAddress(listenPort))
+            .localAddress(new InetSocketAddress(getListenPort()))
             .childHandler(new ChannelInitializer<SocketChannel>() {
                 @Override
                 public void initChannel(SocketChannel ch) {
@@ -148,11 +166,10 @@ public class NettyServerBootstrap implements RemotingBootstrap {
             });
 
         try {
-            ChannelFuture future = this.serverBootstrap.bind(listenPort).sync();
-            LOGGER.info("Server started, listen port: {}", listenPort);
+            this.serverBootstrap.bind(listenPort).sync();
+            LOGGER.info("Server started, listen port: {}", getListenPort());
             RegistryFactory.getInstance().register(new InetSocketAddress(XID.getIpAddress(), XID.getPort()));
             initialized.set(true);
-            future.channel().closeFuture().sync();
         } catch (Exception exx) {
             throw new RuntimeException(exx);
         }
